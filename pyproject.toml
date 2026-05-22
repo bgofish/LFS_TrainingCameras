@@ -1,6 +1,6 @@
 [project]
-name        = "camera_probe"
-version     = "0.1.0"
+name        = "Camera_Toggle"
+version     = "0.1.1"
 description = "Enable/disable individual training cameras in LichtFeld Studio"
 authors     = [{name = "Brian Davis (bb6)"}]
 dependencies = []
