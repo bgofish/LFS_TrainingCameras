@@ -1,0 +1,12 @@
+[project]
+name        = "camera_probe"
+version     = "0.1.0"
+description = "Enable/disable individual training cameras in LichtFeld Studio"
+authors     = [{name = "Brian Davis (bb6)"}]
+dependencies = []
+
+[tool.lichtfeld]
+hot_reload        = true
+plugin_api        = ">=1,<2"
+lichtfeld_version = ">=0.5.0"
+required_features = []
