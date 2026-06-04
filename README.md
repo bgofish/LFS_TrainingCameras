@@ -6,7 +6,7 @@ A panel plugin for managing camera training visibility in Lichtfeld Studio. Adds
 
 Updates:
 
-0.1.3  fixed Syncing from the scene for 'manually' diabled cameras
+0.1.3  fixed Syncing from the scene for 'manually' disabled cameras
 
 
 # Panel Sections
