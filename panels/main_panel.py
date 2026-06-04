@@ -1,9 +1,9 @@
 """
 Camera Training Toggle – Main Panel
 """
+
+
 import re
-import io
-import sys
 import json
 import os
 from collections import Counter
@@ -40,14 +40,11 @@ def _open_dataset_folder() -> None:
 
 
 def _get_camera_states() -> list[tuple[str, bool]]:
-    old = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    lf.list_scene()
-    sys.stdout = old
-    raw = buf.getvalue()
+    scene = lf.get_scene()
     return [
-        (m.group(2), m.group(1) == '+')
-        for m in re.finditer(r'\[(\S+)\s*\]\s+([\w.]+)\s+\(CAMERA,', raw)
+        (node.name, node.training_enabled)
+        for node in scene.get_nodes()
+        if str(node.type) == "NodeType.CAMERA"
     ]
 
 
@@ -113,7 +110,19 @@ class MainPanel(lf.ui.Panel):
         self._needs_refresh = True
         self._frustum_scale = lf.get_render_settings().camera_frustum_scale
 
+        # camera list visibility
+        self._cameras_expanded = False
+
+
+
+
     def draw(self, ui) -> None:
+        try:
+            self._draw_inner(ui)
+        except Exception as ex:
+            ui.label(f"ERROR: {ex}")
+
+    def _draw_inner(self, ui) -> None:
         if not lf.has_scene():
             ui.label("No scene loaded.")
             return
@@ -121,6 +130,12 @@ class MainPanel(lf.ui.Panel):
         if self._needs_refresh or not self._cached_states:
             self._cached_states = _get_camera_states()
             self._needs_refresh = False
+        else:
+            # Sync cache with actual LichtFeld state — catches external changes
+            live = _get_camera_states()
+            live_map = {n: e for n, e in live}
+            if any(live_map.get(n) != e for n, e in self._cached_states):
+                self._cached_states = live
 
         states = self._cached_states
         if not states:
@@ -136,15 +151,44 @@ class MainPanel(lf.ui.Panel):
             self._range_end    = max(0, len(states) - 1)
             self._range_inited = True
 
-        # ── summary ──────────────────────────────────────────────────────────
+        # build shown list early so everything below can use it
+        shown = [
+            (name, enabled) for name, enabled in states
+            if self._active_pattern == "All" or self._active_pattern.lower() in name.lower()
+        ]
+        max_shown_index = max(0, len(shown) - 1)
+        if self._range_end > max_shown_index or not self._range_inited:
+            self._range_end = max_shown_index
+            self._range_inited = True
+
+        # ── row 1: summary + core actions ────────────────────────────────────
         ui.label(f"{len(states)} cameras  |  {enabled_count} on  {disabled_count} off")
-        
-        if ui.button("🔄 Sync/Refresh List"):
+
+        if ui.button("🔄 Sync"):
             self._needs_refresh = True
+        ui.same_line()
+        if ui.button("Save state"):
+            _save_state(states)
+        ui.same_line()
+        if ui.button("Load & apply saved state"):
+            saved = _load_state()
+            if saved:
+                _apply_state(saved)
+                self._cached_states = [
+                    (name, saved[name]) if name in saved else (name, enabled)
+                    for name, enabled in self._cached_states
+                ]
+                lf.log.info(f"[camera_toggle] Loaded and applied {len(saved)} camera states.")
+            else:
+                lf.log.info("[camera_toggle] No saved state found.")
+        ui.same_line()
+        if ui.button("📂 Open folder"):
+            _open_dataset_folder()
+
 
         ui.separator()
 
-        # ── frustum scale slider ──────────────────────────────────────────────
+        # ── frustum scale ─────────────────────────────────────────────────────
         ui.label(f"Frustum Scale: {self._frustum_scale:.2f}")
         if ui.button("◀◀"):
             self._frustum_scale = max(0.01, round(self._frustum_scale - 0.10, 2))
@@ -168,38 +212,24 @@ class MainPanel(lf.ui.Panel):
 
         ui.separator()
 
-        # ── smart pattern matching grid ───────────────────────────────────────
-        ui.label(f"Active Text Filter: [{self._active_pattern}]")
-        
+        # ── pattern filter ────────────────────────────────────────────────────
+        ui.label(f"Filter: [{self._active_pattern}]")
         camera_names = [n for n, _ in states]
         detected_patterns = _detect_repeating_patterns(camera_names)
-        
         if ui.button("Show All"):
             self._active_pattern = "All"
             self._range_inited = False
-            
         for pattern in detected_patterns[:12]:
             ui.same_line()
-            if ui.button(pattern):
+            if ui.button(f"{pattern}##pat"):
                 self._active_pattern = pattern
-                self._range_start = 0  
-                self._range_inited = False  
-                
+                self._range_start = 0
+                self._range_inited = False
+
         ui.separator()
 
-        shown = []
-        for name, enabled in states:
-            if self._active_pattern == "All" or self._active_pattern.lower() in name.lower():
-                shown.append((name, enabled))
-
-        max_shown_index = max(0, len(shown) - 1)
-        if self._range_end > max_shown_index or not self._range_inited:
-            self._range_end = max_shown_index
-            self._range_inited = True
-
-        # ── bulk actions ──────────────────────────────────────────────────────
+        # ── bulk enable / disable ─────────────────────────────────────────────
         action_label_suffix = f" ({self._active_pattern})" if self._active_pattern != "All" else " all"
-        
         if ui.button(f"Enable{action_label_suffix}"):
             shown_names = {n for n, _ in shown}
             new_states = []
@@ -210,7 +240,6 @@ class MainPanel(lf.ui.Panel):
                 else:
                     new_states.append((name, enabled))
             self._cached_states = new_states
-
         ui.same_line()
         if ui.button(f"Disable{action_label_suffix}"):
             shown_names = {n for n, _ in shown}
@@ -225,14 +254,13 @@ class MainPanel(lf.ui.Panel):
 
         ui.separator()
 
-        # ── every-N toggle ────────────────────────────────────────────────────
+        # ── every-N ───────────────────────────────────────────────────────────
         ui.label(f"Keep every Nth frame only:  N = {self._every_n}")
         if ui.button("N −"):
             self._every_n = max(2, self._every_n - 1)
         ui.same_line()
         if ui.button("N +"):
             self._every_n = min(50, self._every_n + 1)
-            
         if ui.button(f"Apply: keep every {self._every_n} frame sequence"):
             shown_names = {n for n, _ in shown}
             new_states = []
@@ -249,9 +277,8 @@ class MainPanel(lf.ui.Panel):
 
         ui.separator()
 
-        # ── range disable ─────────────────────────────────────────────────────
-        ui.label(f"Disable frame range:  From = {self._range_start}  |  To = {self._range_end}")
-        
+        # ── frame range ───────────────────────────────────────────────────────
+        ui.label(f"Frame range:  From = {self._range_start}  |  To = {self._range_end}")
         if ui.button("From −10"):
             self._range_start = max(0, self._range_start - 10)
         ui.same_line()
@@ -263,7 +290,6 @@ class MainPanel(lf.ui.Panel):
         ui.same_line()
         if ui.button("From +10"):
             self._range_start = min(max_shown_index, self._range_start + 10)
-
         if ui.button("To −10"):
             self._range_end = max(0, self._range_end - 10)
         ui.same_line()
@@ -275,13 +301,9 @@ class MainPanel(lf.ui.Panel):
         ui.same_line()
         if ui.button("To +10"):
             self._range_end = min(max_shown_index, self._range_end + 10)
-
         if ui.button("Disable range"):
-            lo = min(self._range_start, self._range_end)
-            hi = max(self._range_start, self._range_end)
-            shown_names = [n for n, _ in shown]
-            target_names = set(shown_names[lo:hi+1])
-            
+            lo, hi = min(self._range_start, self._range_end), max(self._range_start, self._range_end)
+            target_names = set([n for n, _ in shown][lo:hi+1])
             new_states = []
             for name, enabled in states:
                 if name in target_names:
@@ -290,14 +312,10 @@ class MainPanel(lf.ui.Panel):
                 else:
                     new_states.append((name, enabled))
             self._cached_states = new_states
-            
         ui.same_line()
         if ui.button("Enable range"):
-            lo = min(self._range_start, self._range_end)
-            hi = max(self._range_start, self._range_end)
-            shown_names = [n for n, _ in shown]
-            target_names = set(shown_names[lo:hi+1])
-            
+            lo, hi = min(self._range_start, self._range_end), max(self._range_start, self._range_end)
+            target_names = set([n for n, _ in shown][lo:hi+1])
             new_states = []
             for name, enabled in states:
                 if name in target_names:
@@ -309,47 +327,25 @@ class MainPanel(lf.ui.Panel):
 
         ui.separator()
 
-        # ── save / load / open-folder buttons ────────────────────────────────
-        if ui.button("Save state"):
-            _save_state(states)
-        ui.same_line()
-        if ui.button("Load & apply saved state"):
-            saved = _load_state()
-            if saved:
-                _apply_state(saved)
-                # Update the cache directly from saved data so the UI reflects
-                # the applied state immediately without a scene re-query that
-                # could race against Lichtfeld flushing the changes.
-                self._cached_states = [
-                    (name, saved[name]) if name in saved else (name, enabled)
-                    for name, enabled in self._cached_states
-                ]
-                lf.log.info(f"[camera_toggle] Loaded and applied {len(saved)} camera states.")
-            else:
-                lf.log.info("[camera_toggle] No saved state found.")
-        ui.same_line()
-        if ui.button("📂 Open dataset folder"):
-            _open_dataset_folder()
 
         ui.separator()
 
-        # ── per-camera list display ───────────────────────────────────────────
-        ui.label(f"Showing {len(shown)} of {len(states)}")
-        ui.separator()
+        # ── camera list (collapsible) ─────────────────────────────────────────
+        toggle_label = f"▼ Camera List  ({len(shown)} shown)" if self._cameras_expanded else f"► Camera List  ({len(shown)} shown)"
+        if ui.button(toggle_label):
+            self._cameras_expanded = not self._cameras_expanded
 
-        for name, enabled in shown:
-            label = f"[ON]  {name}" if enabled else f"[OFF] {name}"
-            if ui.button(label):
-                next_state = not enabled
-                lf.set_camera_training_enabled(name, next_state)
-                
-                new_states = []
-                for n, e in states:
-                    if n == name:
-                        new_states.append((n, next_state))
-                    else:
-                        new_states.append((n, e))
-                self._cached_states = new_states
+        if self._cameras_expanded:
+            ui.separator()
+            for name, enabled in shown:
+                label = f"[ON]  {name}##cam" if enabled else f"[OFF] {name}##cam"
+                if ui.button(label):
+                    next_state = not enabled
+                    lf.set_camera_training_enabled(name, next_state)
+                    new_states = []
+                    for n, e in states:
+                        new_states.append((n, next_state) if n == name else (n, e))
+                    self._cached_states = new_states
 
 
 # ── global lifecycle integration hooks ────────────────────────────────────────
