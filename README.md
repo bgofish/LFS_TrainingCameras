@@ -2,14 +2,25 @@
 
 A panel plugin for managing camera training visibility in Lichtfeld Studio. Adds a **Cameras** tab to the main panel with tools for bulk toggling, pattern filtering, frame-range control, and persistent state saved directly into your dataset folder.
 
-<img width="1887" height="942" alt="image" src="https://github.com/user-attachments/assets/792164b0-c2e9-4587-ac36-81bae60cd77f" />
+<img width="1709" height="945" alt="image" src="https://github.com/user-attachments/assets/9e6218b7-20d1-413c-b2c1-e9f91ff43620" />
+
+Updates:
+
+0.1.3  fixed Syncing from the scene for 'manually' diabled cameras
+
 
 # Panel Sections
 
 ### Summary
 Shows the total camera count with how many are currently enabled or disabled.
 
-**🔄 Sync/Refresh List** — re-queries the scene. Use this if cameras have been added, removed, or renamed outside the plugin.
+**Sync (Refresh List)** — re-queries the scene. Use this if cameras have been added, removed, or renamed outside the plugin.
+
+**Save state:** saves a json file with current camera state 
+
+**Load & Apply Save state:** reads a json file & updates current camera state
+
+**Open Folder:** opens a file explorer at the Dataset Folder - where the Json file is saved
 
 ---
 
@@ -58,18 +69,6 @@ Enables or disables a contiguous index range within the filtered camera list.
 
 ---
 
-### Save / Load / Open
-
-| Button | Action |
-|--------|--------|
-| **Save state** | Writes current ON/OFF state for all cameras to `camera_states.json` in the dataset folder |
-| **Load & apply saved state** | Reads `camera_states.json` and applies it; updates the UI immediately without a scene re-query |
-| **📂 Open dataset folder** | Opens the dataset folder in your OS file manager  |
-
-The save file path is resolved dynamically from `lf.dataset_params().data_path`, so it always lands next to your currently loaded dataset (e.g. `U:\LFS\DATASETS\Twins\camera_states.json`). Falls back to `~/.lichtfeld/plugins/Cameras/` if no dataset is loaded.
-
----
-
 ### Camera List
 Shows every camera in the filtered set with its current state. Click any camera to toggle it individually.
 
@@ -96,21 +95,3 @@ Shows every camera in the filtered set with its current state. Click any camera 
 The file is human-readable and can be edited manually or committed to version control alongside your dataset.
 
 ---
-
-## API Surface Used
-
-| Call | Purpose |
-|------|---------|
-| `lf.list_scene()` | Enumerate cameras and their training state |
-| `lf.set_camera_training_enabled(name, bool)` | Toggle individual cameras |
-| `lf.dataset_params().data_path` | Resolve the active dataset folder |
-| `lf.get_render_settings().camera_frustum_scale` | Read/write frustum display size |
-| `lf.has_scene()` | Guard against drawing with no scene loaded |
-
----
-
-## Notes
-
-- The camera list is cached between draws for performance. Use **🔄 Sync/Refresh List** if the scene changes externally.
-- **Load & apply** updates the UI cache directly rather than triggering a scene re-query, avoiding a race condition where Lichtfeld hadn't flushed changes before the next draw.
-- The plugin requires `plugin_api >= 1, < 2` and `lichtfeld >= 0.5.0`.
